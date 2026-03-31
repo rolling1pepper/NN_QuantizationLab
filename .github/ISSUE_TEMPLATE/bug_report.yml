@@ -1,0 +1,67 @@
+name: Bug report
+description: Report a defect or regression in Q-Lab
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please provide enough detail to reproduce the problem.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+      placeholder: Static ONNX quantization fails for a TorchScript-exported model.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include the exact command, arguments, and input artifact details.
+      placeholder: |
+        1. Run `python -m q_lab ...`
+        2. Observe the failure during ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or traceback
+      render: shell
+
+  - type: input
+    id: python_version
+    attributes:
+      label: Python version
+      placeholder: "3.12.4"
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS / platform
+      placeholder: "Windows 11, Ubuntu 24.04, macOS 15"
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime target
+      placeholder: "PyTorch CPU, ONNX Runtime CPUExecutionProvider, CUDAExecutionProvider"

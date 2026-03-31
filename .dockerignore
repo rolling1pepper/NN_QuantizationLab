@@ -1,0 +1,14 @@
+.git
+.venv
+.venv_local
+.pytest_cache
+__pycache__
+*.py[cod]
+*.egg-info
+build
+dist
+artifacts
+reports
+tests
+.tmp
+.tmp_pip

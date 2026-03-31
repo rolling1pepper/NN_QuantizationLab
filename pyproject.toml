@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "q-lab"
+version = "1.0.0"
+description = "Production-oriented CLI for profiling, pruning, quantizing, exporting, and validating PyTorch, TorchScript, and ONNX models."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { file = "LICENSE" }
+authors = [{ name = "Q-Lab Contributors" }]
+keywords = ["mlops", "pytorch", "onnx", "quantization", "pruning", "benchmarking"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "numpy==1.26.4",
+    "torch==2.4.1",
+    "torchvision==0.19.1",
+    "transformers==4.46.3",
+    "onnx==1.17.0",
+    "onnxruntime==1.20.1",
+    "pandas==2.2.3",
+    "rich==13.9.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.5",
+    "build==1.2.2.post1",
+]
+
+[project.scripts]
+q-lab = "q_lab.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["q_lab*"]
