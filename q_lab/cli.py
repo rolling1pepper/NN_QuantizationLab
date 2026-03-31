@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
-from typing import Sequence, Tuple
+from typing import Any, Sequence, Tuple
 
 from q_lab import __version__
 from q_lab.types import (
     BenchmarkConfig,
     CompressionConfig,
     InputConfig,
+    InvocationMode,
     ModelFamily,
     ModelFormat,
     PruningMode,
@@ -21,14 +23,17 @@ def build_parser() -> argparse.ArgumentParser:
         prog="q_lab",
         description=(
             "Q-Lab benchmarks, prunes, quantizes and exports PyTorch, TorchScript "
-            "and ONNX models with Rich console and CSV reporting."
+            "and ONNX models with Rich console and CSV reporting. "
+            "Supported eager sources include built-ins, timm:<model>, hf:<model>, "
+            "python:<module>:<factory>, and pyfile:<path>::<factory>."
         ),
     )
     parser.add_argument(
         "model",
         help=(
-            "Model reference: TorchScript .pt path, ONNX .onnx path, or built-in name "
-            "(resnet18, resnet50, mobilenet_v3_small, bert)."
+            "Model reference: TorchScript .pt path, ONNX .onnx path, built-in name "
+            "(resnet18, resnet50, mobilenet_v3_small, bert), timm:<name>, hf:<model>, "
+            "python:<module>:<factory>, or pyfile:<path>::<factory>."
         ),
     )
     parser.add_argument(
@@ -100,6 +105,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--device",
         default="cpu",
         help="Execution device for PyTorch benchmarking, for example cpu or cuda.",
+    )
+    parser.add_argument(
+        "--invocation-mode",
+        choices=("auto", "positional", "keyword"),
+        default="auto",
+        help="Override how synthetic inputs are passed to eager PyTorch models.",
+    )
+    parser.add_argument(
+        "--input-names",
+        default=None,
+        help="Comma-separated input names used for keyword invocation and ONNX export naming.",
+    )
+    parser.add_argument(
+        "--model-kwargs-json",
+        default=None,
+        help=(
+            "Inline JSON object or path to a JSON file with constructor kwargs for "
+            "timm and python factory loaders."
+        ),
+    )
+    parser.add_argument(
+        "--hf-trust-remote-code",
+        action="store_true",
+        help="Pass trust_remote_code=True to Hugging Face config/model loading.",
     )
     parser.add_argument(
         "--providers",
@@ -183,6 +212,32 @@ def parse_onnx_providers(raw_value: str) -> Tuple[str, ...]:
     return providers
 
 
+def parse_input_names(raw_value: str | None) -> Tuple[str, ...] | None:
+    if raw_value is None:
+        return None
+    input_names = tuple(segment.strip() for segment in raw_value.split(",") if segment.strip())
+    if not input_names:
+        raise ValueError("Input names must contain at least one non-empty value.")
+    return input_names
+
+
+def parse_model_kwargs(raw_value: str | None) -> dict[str, Any]:
+    if raw_value is None:
+        return {}
+    candidate_path = Path(raw_value)
+    if candidate_path.exists():
+        payload = candidate_path.read_text(encoding="utf-8")
+    else:
+        payload = raw_value
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise ValueError("--model-kwargs-json must be a JSON object or a path to a JSON file.") from error
+    if not isinstance(parsed, dict):
+        raise ValueError("--model-kwargs-json must decode to a JSON object.")
+    return parsed
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     try:
@@ -209,7 +264,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         onnx_providers = parse_onnx_providers(args.providers)
-        family = infer_model_family(args.model, args.task)
+        input_names_override = parse_input_names(args.input_names)
+        model_kwargs = parse_model_kwargs(args.model_kwargs_json)
+        invocation_mode_override = (
+            None
+            if args.invocation_mode == "auto"
+            else InvocationMode(args.invocation_mode)
+        )
+        family = infer_model_family(
+            args.model,
+            args.task,
+            hf_trust_remote_code=args.hf_trust_remote_code,
+        )
         input_config = InputConfig(
             family=family,
             batch_size=args.batch_size,
@@ -258,6 +324,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 use_pretrained=args.pretrained,
                 onnx_providers=benchmark_config.onnx_providers,
                 onnx_optimization_level=benchmark_config.onnx_optimization_level,
+                model_kwargs=model_kwargs,
+                invocation_mode_override=invocation_mode_override,
+                input_names_override=input_names_override,
+                hf_trust_remote_code=args.hf_trust_remote_code,
             )
 
         if loaded_model.format is ModelFormat.ONNX:

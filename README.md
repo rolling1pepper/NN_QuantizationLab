@@ -7,15 +7,21 @@ Q-Lab is a production-oriented CLI utility for profiling, pruning, quantizing, e
 | Input type | Baseline benchmark | Pruning | Quantization | ONNX export | ONNX Runtime benchmark |
 | --- | --- | --- | --- | --- | --- |
 | Built-in PyTorch models (`resnet18`, `resnet50`, `mobilenet_v3_small`, `bert`) | Yes | Yes | Yes | Yes | Yes |
+| Arbitrary eager PyTorch via `python:<module>:<factory>` | Yes | Yes | Yes | Yes | Yes |
+| Arbitrary eager PyTorch via `pyfile:<path>::<factory>` | Yes | Yes | Yes | Yes | Yes |
+| Third-party `timm:<model>` architectures | Yes | Yes | Yes | Yes | Yes |
+| Third-party `hf:<model>` architectures | Yes | Yes, when prunable layers exist | Yes | Yes | Yes |
 | TorchScript `.pt` | Yes | No | No | Yes | Yes |
 | ONNX `.onnx` | Yes | No | Yes, via ONNX Runtime | Not needed | Yes |
 
 Key constraints:
 
 - PyTorch pruning and PyTorch quantization are supported for eager built-in models.
+- The same eager PyTorch optimization pipeline is now available for third-party eager models loaded through Python factories, `timm`, and generic Hugging Face references.
 - ONNX input models use a separate ONNX Runtime quantization pipeline.
 - ONNX pruning is intentionally not implemented because dense ONNX runtimes usually do not benefit from zeroed weights without backend-specific sparse execution.
 - Exporting already-quantized PyTorch models to ONNX is not supported. Export the float model first, then run Q-Lab on the exported `.onnx` artifact.
+- Raw checkpoint formats such as bare `state_dict` files are supported through an architecture loader, not as standalone direct inputs.
 
 ## Installation
 
@@ -79,6 +85,10 @@ python -m q_lab --help
 Q-Lab accepts:
 
 - A built-in model name such as `resnet50` or `bert`
+- A Python factory reference such as `python:my_package.models:create_model`
+- A Python file factory reference such as `pyfile:C:\models\factory.py::create_model`
+- A `timm` model reference such as `timm:convnext_tiny`
+- A Hugging Face model reference such as `hf:google/vit-base-patch16-224`
 - A TorchScript path such as `models\classifier.pt`
 - An ONNX path such as `artifacts\encoder.onnx`
 - Synthetic input controls such as `--image-shape`, `--sequence-length`, `--vocab-size`, and `--batch-size`
@@ -124,6 +134,10 @@ CSV/report columns include:
 | `--sequence-length` | Synthetic token length for text models |
 | `--vocab-size` | Token sampling range for synthetic text inputs |
 | `--device` | PyTorch execution device such as `cpu` or `cuda` |
+| `--invocation-mode {auto,positional,keyword}` | Override how synthetic inputs are passed to eager models |
+| `--input-names` | Comma-separated eager-model input names |
+| `--model-kwargs-json` | JSON object or JSON file path with constructor kwargs for `timm` and Python factory loaders |
+| `--hf-trust-remote-code` | Enable `trust_remote_code=True` for Hugging Face loading |
 | `--providers` | Comma-separated ONNX Runtime providers |
 | `--ort-optimization-level` | ORT graph optimization level: `disable`, `basic`, `extended`, or `all` |
 | `--pretrained` | Load default pretrained weights for built-in models |
@@ -171,6 +185,30 @@ Use a specific ONNX Runtime provider stack:
 
 ```bash
 python -m q_lab artifacts\model.onnx --providers CUDAExecutionProvider,CPUExecutionProvider --ort-optimization-level all --report-path reports\ort_cuda.csv
+```
+
+Benchmark and optimize an arbitrary eager PyTorch model exposed from a Python module:
+
+```bash
+python -m q_lab python:my_package.models:create_model --task vision --pruning structured --pruning-amount 0.25 --quantization static --image-shape 3,224,224 --model-kwargs-json '{"num_classes": 1000}' --report-path reports\python_factory.csv
+```
+
+Benchmark an eager PyTorch model from a standalone Python file:
+
+```bash
+python -m q_lab pyfile:C:\models\factory.py::create_model --task text --quantization dynamic --sequence-length 128 --vocab-size 30522 --report-path reports\python_file.csv
+```
+
+Benchmark and export a third-party timm architecture:
+
+```bash
+python -m q_lab timm:convnext_tiny --pretrained --task vision --export-onnx --onnx-path artifacts\convnext_tiny.onnx --report-path reports\convnext_tiny.csv
+```
+
+Benchmark a generic Hugging Face architecture:
+
+```bash
+python -m q_lab hf:google/vit-base-patch16-224 --pretrained --task vision --input-names pixel_values --invocation-mode keyword --report-path reports\hf_vit.csv
 ```
 
 ## Recommended Workflow
@@ -258,6 +296,8 @@ Q-Lab is distributed under the MIT License. See `LICENSE` for the full text.
 ## Notes
 
 - Built-in models use random weights by default to avoid implicit downloads. Add `--pretrained` when you want default pretrained checkpoints.
+- Third-party eager PyTorch models loaded through `python:`, `pyfile:`, `timm:`, and `hf:` now use the same pruning, quantization, export, and benchmark pipeline as built-in eager models.
 - Static quantization in both PyTorch and ONNX paths uses synthetic calibration data in this repository. That is sufficient for pipeline validation, but real production calibration should use representative data.
 - `Accuracy Proxy %` is a regression signal computed on synthetic inputs. It is not a replacement for task accuracy on labeled datasets.
 - ONNX input family inference uses graph metadata and common input-name heuristics. When inference is ambiguous, pass `--task vision` or `--task text`.
+- Pruning only affects layers with explicit dense weights such as `Conv2d` and `Linear`. Models without prunable layers will report that limitation instead of silently pretending to optimize.

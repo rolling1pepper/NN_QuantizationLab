@@ -20,6 +20,15 @@ class TinyVisionNet(nn.Module):
         return self.classifier(flattened)
 
 
+class KeywordVisionNet(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.backbone = TinyVisionNet()
+
+    def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        return self.backbone(pixel_values)
+
+
 class TinyTextNet(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -43,6 +52,23 @@ class TinyTextNet(nn.Module):
             "last_hidden_state": logits.unsqueeze(1),
             "pooler_output": logits,
         }
+
+
+class TwoInputTextNet(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(128, 16)
+        self.classifier = nn.Linear(16, 4)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        embeddings = self.embedding(input_ids)
+        mask = attention_mask.unsqueeze(-1).float()
+        pooled = (embeddings * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
+        return self.classifier(pooled)
 
 
 class ThirdPartyVisionNet(nn.Module):
@@ -84,3 +110,19 @@ class ThirdPartyTextNet(nn.Module):
         pooled = (embeddings * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
         projected = torch.relu(self.proj(pooled))
         return self.head(projected)
+
+
+def create_factory_vision_model(
+    use_pretrained: bool = False,
+    num_classes: int = 4,
+) -> nn.Module:
+    del use_pretrained, num_classes
+    return TinyVisionNet().eval()
+
+
+def create_factory_text_model(
+    use_pretrained: bool = False,
+    vocab_size: int = 128,
+) -> nn.Module:
+    del use_pretrained, vocab_size
+    return TinyTextNet().eval()

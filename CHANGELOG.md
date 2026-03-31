@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.1.0] - 2026-03-31
+
+### Added
+
+- Support for arbitrary eager PyTorch models through `python:<module>:<factory>` references.
+- Support for arbitrary eager PyTorch models through `pyfile:<path>::<factory>` references.
+- Support for external `timm:<model>` architectures with full eager PyTorch optimization and export flows.
+- Support for generic `hf:<model>` Hugging Face model loading for third-party architectures beyond the built-in registry.
+- CLI controls for `--invocation-mode`, `--input-names`, `--model-kwargs-json`, and `--hf-trust-remote-code`.
+- Integration and unit coverage for new external eager model sources.
+
+### Changed
+
+- Expanded the support matrix so full pruning, eager quantization, ONNX export, and ONNX Runtime benchmark functionality now applies to third-party eager PyTorch models, not only built-in models.
+- Clarified that ONNX pruning remains intentionally unsupported and that raw checkpoint formats still require an architecture loader.
+
 ## [1.0.0] - 2026-03-30
 
 ### Added

@@ -13,6 +13,7 @@ build/
 dist/
 artifacts/
 reports/
+local_factories/
 .coverage
 htmlcov/
 .DS_Store

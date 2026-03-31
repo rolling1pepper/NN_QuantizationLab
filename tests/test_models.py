@@ -59,6 +59,24 @@ def test_build_dummy_inputs_for_text() -> None:
     assert all(tensor.shape == (2, 7) for tensor in example_inputs)
 
 
+def test_build_dummy_inputs_for_text_with_two_inputs() -> None:
+    example_inputs, input_names, invocation_mode = models.build_dummy_inputs(
+        InputConfig(
+            family=ModelFamily.TEXT,
+            batch_size=2,
+            image_shape=(3, 16, 16),
+            sequence_length=7,
+            vocab_size=64,
+        ),
+        InvocationMode.KEYWORD,
+        input_names_override=("input_ids", "attention_mask"),
+    )
+
+    assert input_names == ("input_ids", "attention_mask")
+    assert invocation_mode is InvocationMode.KEYWORD
+    assert len(example_inputs) == 2
+
+
 def test_load_model_from_torchscript(
     scripted_vision_model_path: Path,
 ) -> None:

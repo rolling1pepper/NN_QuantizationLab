@@ -34,6 +34,14 @@ def test_parse_onnx_providers_accepts_valid_input() -> None:
     )
 
 
+def test_parse_input_names_accepts_valid_input() -> None:
+    assert cli.parse_input_names("pixel_values") == ("pixel_values",)
+
+
+def test_parse_model_kwargs_accepts_inline_json() -> None:
+    assert cli.parse_model_kwargs('{"drop_path_rate": 0.1}') == {"drop_path_rate": 0.1}
+
+
 def test_validate_arguments_rejects_invalid_pruning_amount() -> None:
     parser = cli.build_parser()
 
