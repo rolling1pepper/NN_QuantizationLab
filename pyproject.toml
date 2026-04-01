@@ -34,7 +34,7 @@ dependencies = [
     "onnxruntime==1.20.1",
     "psutil==6.1.1",
     "pandas==2.2.3",
-    "rich==13.9.4",
+    "rich==14.3.3",
 ]
 
 [project.optional-dependencies]
