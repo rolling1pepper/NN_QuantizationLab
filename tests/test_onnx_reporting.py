@@ -64,10 +64,17 @@ def test_render_results_and_save_csv(tmp_path: Path) -> None:
         backend=RuntimeBackend.PYTORCH,
         model_name="Toy Vision",
         source="unit-test",
+        batch_size=1,
         quantization="none",
         pruning="none",
         pruning_amount=0.0,
-        stats=BenchmarkStats(mean_latency_ms=1.23, std_latency_ms=0.1, p95_latency_ms=1.4),
+        stats=BenchmarkStats(
+            mean_latency_ms=1.23,
+            std_latency_ms=0.1,
+            p95_latency_ms=1.4,
+            throughput_items_per_sec=812.5,
+            peak_memory_mb=3.2,
+        ),
         size_mb=3.21,
         sparsity_pct=0.0,
         fidelity=FidelityMetrics(accuracy_proxy_pct=100.0, cosine_similarity=1.0, max_abs_diff=0.0),
@@ -85,6 +92,11 @@ def test_render_results_and_save_csv(tmp_path: Path) -> None:
     dataframe = pd.read_csv(csv_path)
 
     assert "Q-Lab Benchmark Report" in exported_text
+    assert "Batch" in exported_text
     assert "Target" in exported_text
+    assert "812.50" in exported_text
     assert csv_path.exists()
     assert dataframe.loc[0, "label"] == "baseline"
+    assert dataframe.loc[0, "batch_size"] == 1
+    assert "throughput_items_per_sec" in dataframe.columns
+    assert "peak_memory_mb" in dataframe.columns

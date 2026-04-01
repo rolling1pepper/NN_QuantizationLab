@@ -121,6 +121,36 @@ def test_load_model_from_huggingface_reference(monkeypatch) -> None:
     assert loaded_model.invocation_mode is models.InvocationMode.KEYWORD
 
 
+def test_load_model_from_huggingface_sequence_classification_auto_class(monkeypatch) -> None:
+    monkeypatch.setattr(
+        models.AutoConfig,
+        "from_pretrained",
+        staticmethod(lambda *args, **kwargs: SimpleNamespace(model_type="bert", to_dict=lambda: {"vocab_size": 128})),
+    )
+    monkeypatch.setattr(
+        models.AutoModelForSequenceClassification,
+        "from_pretrained",
+        staticmethod(lambda *args, **kwargs: TinyTextNet().eval()),
+    )
+
+    loaded_model = models.load_model(
+        model_ref="hf:acme-bert-classifier",
+        input_config=InputConfig(
+            family=ModelFamily.TEXT,
+            batch_size=1,
+            image_shape=(3, 8, 8),
+            sequence_length=6,
+            vocab_size=128,
+        ),
+        device="cpu",
+        use_pretrained=True,
+        hf_auto_class="sequence-classification",
+    )
+
+    assert loaded_model.source == "huggingface"
+    assert loaded_model.metadata["auto_class"] == "sequence-classification"
+
+
 def test_load_model_from_huggingface_reference_infers_two_text_inputs(monkeypatch) -> None:
     monkeypatch.setattr(
         models.AutoConfig,
@@ -148,6 +178,17 @@ def test_load_model_from_huggingface_reference_infers_two_text_inputs(monkeypatc
 
     assert loaded_model.input_names == ("input_ids", "attention_mask")
     assert len(loaded_model.example_inputs) == 2
+
+
+def test_infer_model_family_for_huggingface_auto_class_override() -> None:
+    assert (
+        models.infer_model_family(
+            "hf:acme-vit-classifier",
+            "auto",
+            hf_auto_class="image-classification",
+        )
+        is ModelFamily.VISION
+    )
 
 
 @pytest.mark.integration

@@ -16,7 +16,15 @@ from torchvision.models import (
     resnet18,
     resnet50,
 )
-from transformers import AutoConfig, AutoModel
+from transformers import (
+    AutoConfig,
+    AutoModel,
+    AutoModelForCausalLM,
+    AutoModelForImageClassification,
+    AutoModelForMaskedLM,
+    AutoModelForSequenceClassification,
+    AutoModelForTokenClassification,
+)
 
 from q_lab.onnx_utils import infer_onnx_model_family, load_onnx_model
 from q_lab.types import (
@@ -73,12 +81,31 @@ HF_PREFIX = "hf:"
 TIMM_PREFIX = "timm:"
 PYTHON_PREFIXES = ("python:", "py:")
 PYFILE_PREFIX = "pyfile:"
+HF_AUTO_CLASS_ALIASES: dict[str, type] = {
+    "auto": AutoModel,
+    "model": AutoModel,
+    "image-classification": AutoModelForImageClassification,
+    "sequence-classification": AutoModelForSequenceClassification,
+    "token-classification": AutoModelForTokenClassification,
+    "causal-lm": AutoModelForCausalLM,
+    "masked-lm": AutoModelForMaskedLM,
+}
+TEXT_HF_AUTO_CLASSES = {
+    "auto",
+    "model",
+    "sequence-classification",
+    "token-classification",
+    "causal-lm",
+    "masked-lm",
+}
+VISION_HF_AUTO_CLASSES = {"image-classification"}
 
 
 def infer_model_family(
     model_ref: str,
     requested_task: str,
     hf_trust_remote_code: bool = False,
+    hf_auto_class: str = "auto",
 ) -> ModelFamily:
     if requested_task != "auto":
         return ModelFamily(requested_task)
@@ -103,6 +130,10 @@ def infer_model_family(
     if lowered_ref.startswith(TIMM_PREFIX):
         return ModelFamily.VISION
     if lowered_ref.startswith(HF_PREFIX):
+        if hf_auto_class in VISION_HF_AUTO_CLASSES:
+            return ModelFamily.VISION
+        if hf_auto_class in TEXT_HF_AUTO_CLASSES and hf_auto_class != "auto":
+            return ModelFamily.TEXT
         return _infer_huggingface_family(
             model_ref=model_ref,
             trust_remote_code=hf_trust_remote_code,
@@ -181,6 +212,7 @@ def load_model(
     invocation_mode_override: InvocationMode | None = None,
     input_names_override: Sequence[str] | None = None,
     hf_trust_remote_code: bool = False,
+    hf_auto_class: str = "auto",
 ) -> LoadedModel:
     model_path = Path(model_ref)
     if model_path.exists():
@@ -239,6 +271,7 @@ def load_model(
             invocation_mode_override=invocation_mode_override,
             input_names_override=input_names_override,
             hf_trust_remote_code=hf_trust_remote_code,
+            hf_auto_class=hf_auto_class,
         )
     if lowered_ref.startswith(PYFILE_PREFIX):
         return _load_python_file_model(
@@ -378,20 +411,22 @@ def _load_huggingface_model(
     invocation_mode_override: InvocationMode | None,
     input_names_override: Sequence[str] | None,
     hf_trust_remote_code: bool,
+    hf_auto_class: str,
 ) -> LoadedModel:
     model_id = _strip_prefix(model_ref, HF_PREFIX)
     config = AutoConfig.from_pretrained(
         model_id,
         trust_remote_code=hf_trust_remote_code,
     )
+    model_class = _resolve_huggingface_auto_class(hf_auto_class)
     if use_pretrained:
-        model = AutoModel.from_pretrained(
+        model = model_class.from_pretrained(
             model_id,
             config=config,
             trust_remote_code=hf_trust_remote_code,
         )
     else:
-        model = AutoModel.from_config(config)
+        model = model_class.from_config(config)
 
     default_input_names = (
         ("pixel_values",)
@@ -415,6 +450,7 @@ def _load_huggingface_model(
             "checkpoint": model_id,
             "weights": "default" if use_pretrained else "random-config",
             "trust_remote_code": hf_trust_remote_code,
+            "auto_class": hf_auto_class,
         },
     )
 
@@ -764,3 +800,13 @@ def _invoke_loader(loader: Callable[..., LoadedModel], **kwargs: Any) -> LoadedM
         if key in signature.parameters
     }
     return loader(**filtered_kwargs)
+
+
+def _resolve_huggingface_auto_class(hf_auto_class: str) -> type:
+    try:
+        return HF_AUTO_CLASS_ALIASES[hf_auto_class]
+    except KeyError as error:
+        raise ValueError(
+            "Unsupported Hugging Face auto class. "
+            f"Use one of: {', '.join(sorted(HF_AUTO_CLASS_ALIASES))}."
+        ) from error

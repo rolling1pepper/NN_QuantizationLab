@@ -137,6 +137,8 @@ class BenchmarkStats:
     mean_latency_ms: float
     std_latency_ms: float
     p95_latency_ms: float
+    throughput_items_per_sec: float | None = None
+    peak_memory_mb: float | None = None
 
 
 @dataclass
@@ -156,6 +158,7 @@ class BenchmarkResult:
     backend: RuntimeBackend
     model_name: str
     source: str
+    batch_size: int
     quantization: str
     pruning: str
     pruning_amount: float
@@ -174,12 +177,23 @@ class BenchmarkResult:
             "backend": self.backend.value,
             "model_name": self.model_name,
             "source": self.source,
+            "batch_size": self.batch_size,
             "quantization": self.quantization,
             "pruning": self.pruning,
             "pruning_amount": round(self.pruning_amount, 4),
             "mean_latency_ms": round(self.stats.mean_latency_ms, 4),
             "std_latency_ms": round(self.stats.std_latency_ms, 4),
             "p95_latency_ms": round(self.stats.p95_latency_ms, 4),
+            "throughput_items_per_sec": (
+                None
+                if self.stats.throughput_items_per_sec is None
+                else round(self.stats.throughput_items_per_sec, 4)
+            ),
+            "peak_memory_mb": (
+                None
+                if self.stats.peak_memory_mb is None
+                else round(self.stats.peak_memory_mb, 4)
+            ),
             "size_mb": round(self.size_mb, 4),
             "sparsity_pct": round(self.sparsity_pct, 4),
             "accuracy_proxy_pct": (

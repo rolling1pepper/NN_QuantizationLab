@@ -29,12 +29,14 @@ def optimize_model(
     loaded_model: LoadedModel,
     compression: CompressionConfig,
     benchmark_config: BenchmarkConfig,
+    calibration_input_batches: tuple[tuple[Tensor, ...], ...] | None = None,
 ) -> OptimizationOutcome:
     if loaded_model.format is ModelFormat.ONNX:
         return quantize_onnx_artifact(
             loaded_model=loaded_model,
             compression=compression,
             benchmark_config=benchmark_config,
+            calibration_input_batches=calibration_input_batches,
         )
 
     if (
@@ -69,9 +71,12 @@ def optimize_model(
     elif compression.quantization is QuantizationMode.STATIC:
         if loaded_model.family is not ModelFamily.VISION:
             raise ValueError("Static quantization is currently restricted to vision models.")
+        default_calibration_batches = (
+            tuple(clone_inputs_to_device(loaded_model.example_inputs, "cpu")),
+        )
         working_model = apply_static_quantization(
             model=working_model,
-            example_inputs=clone_inputs_to_device(loaded_model.example_inputs, "cpu"),
+            calibration_input_batches=calibration_input_batches or default_calibration_batches,
             calibration_iterations=benchmark_config.calibration_iterations,
         )
         notes.append(
@@ -120,16 +125,19 @@ def apply_dynamic_quantization(model: nn.Module) -> nn.Module:
 
 def apply_static_quantization(
     model: nn.Module,
-    example_inputs: Tuple[Tensor, ...],
+    calibration_input_batches: Tuple[Tuple[Tensor, ...], ...],
     calibration_iterations: int,
 ) -> nn.Module:
+    if not calibration_input_batches:
+        raise ValueError("Static quantization requires at least one calibration batch.")
+
     backend = _select_quantization_backend()
     torch.backends.quantized.engine = backend
     qconfig_mapping = QConfigMapping().set_global(get_default_qconfig(backend))
-    prepared = prepare_fx(model, qconfig_mapping, example_inputs)
+    prepared = prepare_fx(model, qconfig_mapping, calibration_input_batches[0])
     with torch.inference_mode():
-        for _ in range(calibration_iterations):
-            prepared(*example_inputs)
+        for index in range(calibration_iterations):
+            prepared(*calibration_input_batches[index % len(calibration_input_batches)])
     return convert_fx(prepared)
 
 

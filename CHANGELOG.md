@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.2.0] - 2026-04-01
+
+### Added
+
+- JSON run configuration support through `--config`, with explicit CLI flags overriding config values.
+- Batch-size sweep support through `--batch-sizes`, including batched ONNX artifact naming for multi-run exports.
+- Dataset-backed benchmark, calibration, and fidelity inputs through `--benchmark-inputs-json`, `--calibration-inputs-json`, and `--eval-inputs-json`.
+- Throughput and peak-memory metrics in Rich reports and CSV exports.
+- Task-aware Hugging Face loading through `--hf-auto-class` for generic models, classifiers, token classifiers, masked language models, and causal language models.
+- Automated coverage for config expansion, input-data loading, Hugging Face auto-class selection, and dataset-driven CLI runs.
+
+### Changed
+
+- Extended the benchmark engine so timed loops can cycle over multiple input batches instead of a single synthetic example.
+- Static quantization flows for both PyTorch and ONNX can now calibrate against user-provided datasets rather than only synthetic repeated inputs.
+- Report tables and CSV exports now include `batch_size`, `throughput_items_per_sec`, and `peak_memory_mb`.
+
 ## [1.1.0] - 2026-03-31
 
 ### Added

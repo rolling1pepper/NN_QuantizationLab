@@ -271,6 +271,7 @@ def quantize_onnx_artifact(
     loaded_model: LoadedModel,
     compression: CompressionConfig,
     benchmark_config: BenchmarkConfig,
+    calibration_input_batches: Sequence[Sequence[Tensor]] | None = None,
 ) -> OptimizationOutcome:
     if loaded_model.format is not ModelFormat.ONNX:
         raise ValueError("ONNX quantization requires an ONNX input model.")
@@ -308,9 +309,10 @@ def quantize_onnx_artifact(
         )
         notes.append("ONNX Runtime dynamic quantization applied.")
     elif compression.quantization is QuantizationMode.STATIC:
-        calibration_reader = SyntheticCalibrationDataReader(
+        calibration_reader = InputBatchCalibrationDataReader(
             input_names=loaded_model.input_names,
             template_inputs=loaded_model.example_inputs,
+            input_batches=calibration_input_batches,
             calibration_iterations=benchmark_config.calibration_iterations,
         )
         quantize_static(
@@ -361,15 +363,24 @@ class OnnxExportWrapper(nn.Module):
         return flattened
 
 
-class SyntheticCalibrationDataReader(CalibrationDataReader):
+class InputBatchCalibrationDataReader(CalibrationDataReader):
     def __init__(
         self,
         input_names: Sequence[str],
         template_inputs: Sequence[Tensor],
+        input_batches: Sequence[Sequence[Tensor]] | None,
         calibration_iterations: int,
     ) -> None:
         self._input_names = tuple(input_names)
         self._template_inputs = tuple(tensor.detach().cpu() for tensor in template_inputs)
+        self._input_batches = (
+            tuple(
+                tuple(tensor.detach().cpu() for tensor in batch)
+                for batch in input_batches
+            )
+            if input_batches is not None
+            else tuple()
+        )
         self._calibration_iterations = calibration_iterations
         self._index = 0
 
@@ -377,15 +388,37 @@ class SyntheticCalibrationDataReader(CalibrationDataReader):
         if self._index >= self._calibration_iterations:
             return None
 
-        sample = {
-            name: _build_calibration_tensor(name=name, tensor=tensor, step=self._index).numpy()
-            for name, tensor in zip(self._input_names, self._template_inputs)
-        }
+        if self._input_batches:
+            current_batch = self._input_batches[self._index % len(self._input_batches)]
+            sample = {
+                name: tensor.numpy()
+                for name, tensor in zip(self._input_names, current_batch)
+            }
+        else:
+            sample = {
+                name: _build_calibration_tensor(name=name, tensor=tensor, step=self._index).numpy()
+                for name, tensor in zip(self._input_names, self._template_inputs)
+            }
         self._index += 1
         return sample
 
     def rewind(self) -> None:
         self._index = 0
+
+
+class SyntheticCalibrationDataReader(InputBatchCalibrationDataReader):
+    def __init__(
+        self,
+        input_names: Sequence[str],
+        template_inputs: Sequence[Tensor],
+        calibration_iterations: int,
+    ) -> None:
+        super().__init__(
+            input_names=input_names,
+            template_inputs=template_inputs,
+            input_batches=None,
+            calibration_iterations=calibration_iterations,
+        )
 
 
 def _resolve_onnx_shape(

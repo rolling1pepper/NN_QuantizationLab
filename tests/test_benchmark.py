@@ -62,6 +62,8 @@ def test_benchmark_engine_runs_pytorch_benchmark(
 
     assert result.stats.mean_latency_ms >= 0.0
     assert result.stats.p95_latency_ms >= 0.0
+    assert result.stats.throughput_items_per_sec is not None
+    assert result.stats.throughput_items_per_sec > 0.0
     assert result.size_mb > 0.0
     assert result.fidelity.accuracy_proxy_pct == 100.0
 
@@ -103,5 +105,6 @@ def test_benchmark_engine_runs_onnx_benchmark(
     )
 
     assert result.stats.mean_latency_ms >= 0.0
+    assert result.stats.throughput_items_per_sec is not None
     assert result.size_mb > 0.0
     assert "ExecutionProvider" in result.execution_target

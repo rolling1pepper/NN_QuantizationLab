@@ -13,10 +13,13 @@ from q_lab.types import BenchmarkResult
 def render_results(console: Console, results: Sequence[BenchmarkResult]) -> None:
     table = Table(title="Q-Lab Benchmark Report", show_lines=False)
     table.add_column("Label", style="bold cyan")
+    table.add_column("Batch", justify="right")
     table.add_column("Backend", style="green")
     table.add_column("Target")
     table.add_column("Latency (ms)", justify="right")
     table.add_column("P95 (ms)", justify="right")
+    table.add_column("Throughput", justify="right")
+    table.add_column("Peak Mem (MB)", justify="right")
     table.add_column("Size (MB)", justify="right")
     table.add_column("Sparsity %", justify="right")
     table.add_column("Accuracy Proxy %", justify="right")
@@ -26,10 +29,21 @@ def render_results(console: Console, results: Sequence[BenchmarkResult]) -> None
     for result in results:
         table.add_row(
             result.label,
+            str(result.batch_size),
             result.backend.value,
             result.execution_target,
             f"{result.stats.mean_latency_ms:.3f}",
             f"{result.stats.p95_latency_ms:.3f}",
+            (
+                "-"
+                if result.stats.throughput_items_per_sec is None
+                else f"{result.stats.throughput_items_per_sec:.2f}"
+            ),
+            (
+                "-"
+                if result.stats.peak_memory_mb is None
+                else f"{result.stats.peak_memory_mb:.3f}"
+            ),
             f"{result.size_mb:.3f}",
             f"{result.sparsity_pct:.2f}",
             (
@@ -44,7 +58,6 @@ def render_results(console: Console, results: Sequence[BenchmarkResult]) -> None
             ),
             result.notes,
         )
-
 
     console.print(table)
 

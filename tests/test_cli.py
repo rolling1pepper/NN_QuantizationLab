@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -40,6 +41,44 @@ def test_parse_input_names_accepts_valid_input() -> None:
 
 def test_parse_model_kwargs_accepts_inline_json() -> None:
     assert cli.parse_model_kwargs('{"drop_path_rate": 0.1}') == {"drop_path_rate": 0.1}
+
+
+def test_parse_batch_sizes_accepts_valid_input() -> None:
+    assert cli.parse_batch_sizes("1,4,8", 1) == (1, 4, 8)
+
+
+def test_expand_config_argv_applies_json_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "run.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "model": "resnet18",
+                "warmup_iterations": 2,
+                "benchmark_iterations": 5,
+                "batch_sizes": [1, 4],
+                "pretrained": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        cli.expand_config_argv(
+            [
+                "--config",
+                str(config_path),
+                "--benchmark-iterations",
+                "7",
+            ]
+        )
+    )
+
+    assert args.model == "resnet18"
+    assert args.warmup_iterations == 2
+    assert args.benchmark_iterations == 7
+    assert args.batch_sizes == "1,4"
+    assert args.pretrained is True
 
 
 def test_validate_arguments_rejects_invalid_pruning_amount() -> None:
@@ -266,6 +305,105 @@ def test_cli_runs_dynamic_quantization_for_onnx_text_input(
     assert set(dataframe["backend"]) == {"onnxruntime"}
     assert set(dataframe["quantization"]) == {"none", "dynamic"}
     assert set(dataframe["source"]) == {"onnx"}
+
+
+@pytest.mark.integration
+def test_cli_runs_batch_size_sweep_from_config_for_patched_builtin_vision_model(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "run_config.json"
+    report_path = tmp_path / "batch_sweep.csv"
+    config_path.write_text(
+        json.dumps(
+            {
+                "model": "toyvision",
+                "quantization": "static",
+                "image_shape": "3,8,8",
+                "warmup_iterations": 1,
+                "benchmark_iterations": 2,
+                "calibration_iterations": 1,
+                "batch_sizes": [1, 2],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        models.SUPPORTED_TORCHVISION_MODELS,
+        "toyvision",
+        ("Toy Vision", lambda use_pretrained: TinyVisionNet()),
+    )
+
+    exit_code = cli.main(
+        [
+            "--config",
+            str(config_path),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    dataframe = pd.read_csv(report_path)
+
+    assert set(dataframe["batch_size"]) == {1, 2}
+    assert set(dataframe["label"]) == {"baseline", "optimized"}
+    assert "throughput_items_per_sec" in dataframe.columns
+
+
+@pytest.mark.integration
+def test_cli_uses_json_input_datasets_for_benchmark_calibration_and_eval(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "dataset_driven.csv"
+    dataset_path = tmp_path / "vision_samples.json"
+    dataset_path.write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {"input": [[[0.0] * 8 for _ in range(8)] for _ in range(3)]},
+                    {"input": [[[1.0] * 8 for _ in range(8)] for _ in range(3)]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        models.SUPPORTED_TORCHVISION_MODELS,
+        "toyvision",
+        ("Toy Vision", lambda use_pretrained: TinyVisionNet()),
+    )
+
+    exit_code = cli.main(
+        [
+            "toyvision",
+            "--quantization",
+            "static",
+            "--image-shape",
+            "3,8,8",
+            "--warmup-iterations",
+            "1",
+            "--benchmark-iterations",
+            "2",
+            "--calibration-iterations",
+            "2",
+            "--benchmark-inputs-json",
+            str(dataset_path),
+            "--calibration-inputs-json",
+            str(dataset_path),
+            "--eval-inputs-json",
+            str(dataset_path),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    dataframe = pd.read_csv(report_path)
+
+    assert set(dataframe["label"]) == {"baseline", "optimized"}
+    assert dataframe["throughput_items_per_sec"].notna().all()
 
 
 @pytest.mark.integration
