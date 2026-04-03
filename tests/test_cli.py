@@ -411,6 +411,8 @@ def test_cli_writes_manifest_html_and_eval_metrics(
     exit_code = cli.main(
         [
             "rulevision",
+            "--image-shape",
+            "3,8,8",
             "--eval-data-path",
             str(eval_dataset_path),
             "--html-report-path",

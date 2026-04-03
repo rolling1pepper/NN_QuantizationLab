@@ -70,6 +70,16 @@ def _try_extract_named_logits(output: Any) -> Tensor | None:
         return None
     if isinstance(output, Tensor):
         return output
+    if isinstance(output, (list, tuple, dict)):
+        logits = getattr(output, "logits", None)
+        if isinstance(logits, Tensor):
+            return logits
+        if isinstance(output, dict):
+            for preferred_key in ("logits", "pooler_output"):
+                tensor = output.get(preferred_key)
+                if isinstance(tensor, Tensor):
+                    return tensor
+        return None
     try:
         tensor = torch.as_tensor(output)
     except (RuntimeError, TypeError, ValueError):
@@ -93,13 +103,6 @@ def _collect_tensor_candidates(output: Any) -> Iterable[Tensor]:
     if isinstance(output, Tensor):
         yield output
         return
-    try:
-        tensor = torch.as_tensor(output)
-    except (RuntimeError, TypeError, ValueError):
-        tensor = None
-    if tensor is not None:
-        yield tensor
-        return
     if hasattr(output, "logits") and isinstance(output.logits, Tensor):
         yield output.logits
     if hasattr(output, "to_tuple"):
@@ -116,6 +119,13 @@ def _collect_tensor_candidates(output: Any) -> Iterable[Tensor]:
     if isinstance(output, (list, tuple)):
         for item in output:
             yield from _collect_tensor_candidates(item)
+        return
+    try:
+        tensor = torch.as_tensor(output)
+    except (RuntimeError, TypeError, ValueError):
+        tensor = None
+    if tensor is not None:
+        yield tensor
 
 
 def _compute_macro_f1_pct(predictions: Tensor, labels: Tensor) -> float:
