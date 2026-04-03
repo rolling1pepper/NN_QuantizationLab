@@ -83,6 +83,7 @@ def test_render_results_and_save_csv(tmp_path: Path) -> None:
         iterations=2,
         artifact_path="artifact.pt",
         notes="Unit test result.",
+        execution_target="cpu",
     )
     console = Console(record=True, width=120)
     csv_path = tmp_path / "report.csv"
@@ -94,15 +95,21 @@ def test_render_results_and_save_csv(tmp_path: Path) -> None:
 
     exported_text = console.export_text()
     dataframe = pd.read_csv(csv_path)
+    exported_html = html_path.read_text(encoding="utf-8")
 
     assert "Q-Lab Benchmark Report" in exported_text
-    assert "Batch" in exported_text
-    assert "Target" in exported_text
+    assert "baseline" in exported_text
+    assert "pytorch" in exported_text
+    assert "cpu" in exported_text
     assert "812.50" in exported_text
     assert csv_path.exists()
     assert html_path.exists()
     assert dataframe.loc[0, "label"] == "baseline"
     assert dataframe.loc[0, "batch_size"] == 1
+    assert dataframe.loc[0, "execution_target"] == "cpu"
     assert "throughput_items_per_sec" in dataframe.columns
     assert "peak_memory_mb" in dataframe.columns
     assert "eval_top1_accuracy_pct" in dataframe.columns
+    assert "Q-Lab Benchmark Report" in exported_html
+    assert "execution_target" in exported_html
+    assert "q_lab_version" in exported_html
