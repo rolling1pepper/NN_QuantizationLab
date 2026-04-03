@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project follows Semantic Versioning.
 
+## [1.3.0] - 2026-04-01
+
+### Added
+
+- Config-driven experiment matrix execution through the optional `matrix` section in JSON run configs.
+- Label-aware evaluation metrics with `eval_top1_accuracy_pct`, `eval_macro_f1_pct`, and `eval_sample_count`.
+- Dataset adapters for `.json`, `.jsonl`, `.csv`, and vision `ImageFolder` directories.
+- Optional reproducibility manifests through `--manifest-path`.
+- Optional standalone HTML reports through `--html-report-path`.
+
+### Changed
+
+- The dataset pipeline now understands labeled evaluation records instead of only unlabeled input batches.
+- Benchmark rows now capture both fidelity-to-baseline signals and task-style evaluation metrics when labels are available.
+- Input dataset flags accept generic data paths instead of only JSON-specific files, while the old JSON flag names remain as compatible aliases.
+
 ## [1.2.0] - 2026-04-01
 
 ### Added

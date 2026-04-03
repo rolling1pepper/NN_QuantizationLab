@@ -6,6 +6,14 @@ from pathlib import Path
 from typing import Any, Sequence, Tuple
 
 from q_lab import __version__
+from q_lab.experiments import (
+    build_manifest,
+    build_run_matrix,
+    build_run_suffix,
+    collect_explicit_overrides,
+    extract_config_path,
+    save_manifest,
+)
 from q_lab.types import (
     BenchmarkConfig,
     CompressionConfig,
@@ -139,21 +147,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--benchmark-inputs-json",
+        "--benchmark-data-path",
+        dest="benchmark_data_path",
         type=Path,
         default=None,
-        help="Optional JSON dataset used for timed benchmark iterations.",
+        help="Optional benchmark dataset path (.json/.jsonl/.csv or image folder).",
     )
     parser.add_argument(
         "--calibration-inputs-json",
+        "--calibration-data-path",
+        dest="calibration_data_path",
         type=Path,
         default=None,
-        help="Optional JSON dataset used for static quantization calibration.",
+        help="Optional calibration dataset path (.json/.jsonl/.csv or image folder).",
     )
     parser.add_argument(
         "--eval-inputs-json",
+        "--eval-data-path",
+        dest="eval_data_path",
         type=Path,
         default=None,
-        help="Optional JSON dataset used for baseline-versus-optimized fidelity comparison.",
+        help="Optional evaluation dataset path (.json/.jsonl/.csv or image folder).",
+    )
+    parser.add_argument(
+        "--html-report-path",
+        type=Path,
+        default=None,
+        help="Optional HTML report output path.",
+    )
+    parser.add_argument(
+        "--manifest-path",
+        type=Path,
+        default=None,
+        help="Optional reproducibility manifest JSON path.",
     )
     parser.add_argument(
         "--hf-trust-remote-code",
@@ -300,6 +326,7 @@ def parse_batch_sizes(raw_value: str | None, default_batch_size: int) -> Tuple[i
 
 def expand_config_argv(argv: Sequence[str] | None) -> list[str]:
     normalized_argv = list(argv or [])
+    parser = build_parser()
     config_parser = argparse.ArgumentParser(add_help=False)
     config_parser.add_argument("--config", type=Path, default=None)
     config_args, remaining = config_parser.parse_known_args(normalized_argv)
@@ -307,7 +334,11 @@ def expand_config_argv(argv: Sequence[str] | None) -> list[str]:
         return normalized_argv
 
     config_payload = load_json_config(config_args.config)
-    config_arguments = config_to_argv(config_payload)
+    _, explicit_model = collect_explicit_overrides(parser, normalized_argv)
+    config_arguments = config_to_argv(
+        config_payload,
+        include_model=not explicit_model,
+    )
     return config_arguments + remaining
 
 
@@ -318,15 +349,15 @@ def load_json_config(path: Path) -> dict[str, Any]:
     return payload
 
 
-def config_to_argv(config_payload: dict[str, Any]) -> list[str]:
+def config_to_argv(config_payload: dict[str, Any], include_model: bool = True) -> list[str]:
     argv: list[str] = []
     model_value = config_payload.get("model")
     for key, value in config_payload.items():
-        if key == "model":
+        if key in {"model", "matrix"}:
             continue
         option_name = f"--{key.replace('_', '-')}"
         argv.extend(_serialize_config_option(option_name=option_name, value=value))
-    if model_value is not None:
+    if include_model and model_value is not None:
         argv.append(str(model_value))
     return argv
 
@@ -345,9 +376,11 @@ def _serialize_config_option(option_name: str, value: Any) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    raw_argv = list(argv or [])
+    config_path = extract_config_path(raw_argv)
     parser = build_parser()
     try:
-        args = parser.parse_args(expand_config_argv(argv))
+        args = parser.parse_args(expand_config_argv(raw_argv))
     except SystemExit as exit_error:
         return int(exit_error.code)
     except Exception as error:
@@ -358,9 +391,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         from rich.traceback import install as install_rich_traceback
 
         from q_lab.benchmark import BenchmarkEngine
-        from q_lab.input_data import load_input_batches
+        from q_lab.input_data import load_input_dataset
         from q_lab.models import infer_model_family, load_model
-        from q_lab.reporting import render_results, save_results_csv
+        from q_lab.reporting import render_results, save_results_csv, save_results_html
     except ImportError as error:
         parser.exit(
             1,
@@ -375,10 +408,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.model is None:
             parser.print_usage()
             return 2
+        raw_config = load_json_config(config_path) if config_path is not None else {}
+        explicit_overrides, _ = collect_explicit_overrides(parser, raw_argv)
         onnx_providers = parse_onnx_providers(args.providers)
         input_names_override = parse_input_names(args.input_names)
         model_kwargs = parse_model_kwargs(args.model_kwargs_json)
         batch_sizes = parse_batch_sizes(args.batch_sizes, args.batch_size)
+        matrix_runs, varying_keys = build_run_matrix(
+            args=args,
+            raw_config=raw_config,
+            explicit_overrides=explicit_overrides,
+            batch_size_values=batch_sizes,
+        )
         invocation_mode_override = (
             None
             if args.invocation_mode == "auto"
@@ -400,34 +441,60 @@ def main(argv: Sequence[str] | None = None) -> int:
             onnx_optimization_level=args.ort_optimization_level,
         )
         model_format = infer_model_format(args.model)
-        _validate_arguments(
-            parser=parser,
-            compression_config=CompressionConfig(
-                quantization=QuantizationMode(args.quantization),
-                pruning=PruningMode(args.pruning),
-                pruning_amount=args.pruning_amount,
-                export_onnx=args.export_onnx,
-                onnx_path=_resolve_onnx_export_path(
-                    model_ref=args.model,
-                    requested_path=args.onnx_path,
-                ),
-                onnx_opset=args.onnx_opset,
-                onnx_quantized_path=args.onnx_quantized_path,
-                onnx_quant_format=args.onnx_quant_format,
-                preprocess_onnx=not args.disable_onnx_preprocess,
-            ),
-            family=family,
-            device=args.device,
-            model_format=model_format,
-        )
         all_results = []
         output_paths = {"onnx_export": None, "onnx_quantized": None}
         image_shape = parse_image_shape(args.image_shape)
+        html_report_path = args.html_report_path
+        manifest_path = args.manifest_path
 
-        for batch_size in batch_sizes:
+        for run_overrides in matrix_runs:
+            run_batch_size = int(run_overrides.get("batch_size", args.batch_size))
+            run_quantization = str(run_overrides.get("quantization", args.quantization))
+            run_pruning = str(run_overrides.get("pruning", args.pruning))
+            run_pruning_amount = float(run_overrides.get("pruning_amount", args.pruning_amount))
+            run_device = str(run_overrides.get("device", args.device))
+            run_providers = parse_onnx_providers(
+                str(run_overrides.get("providers", args.providers))
+            )
+            run_hf_auto_class = str(run_overrides.get("hf_auto_class", args.hf_auto_class))
+            run_ort_optimization_level = str(
+                run_overrides.get("ort_optimization_level", args.ort_optimization_level)
+            )
+            run_pretrained = bool(run_overrides.get("pretrained", args.pretrained))
+            run_export_onnx = bool(run_overrides.get("export_onnx", args.export_onnx))
+            run_suffix = build_run_suffix(run_overrides, varying_keys)
+
+            run_compression_config = CompressionConfig(
+                quantization=QuantizationMode(run_quantization),
+                pruning=PruningMode(run_pruning),
+                pruning_amount=run_pruning_amount,
+                export_onnx=run_export_onnx,
+                onnx_path=_resolve_run_artifact_path(
+                    path=_resolve_onnx_export_path(
+                        model_ref=args.model,
+                        requested_path=args.onnx_path,
+                    ),
+                    run_suffix=run_suffix,
+                ),
+                onnx_opset=args.onnx_opset,
+                onnx_quantized_path=_resolve_run_artifact_path(
+                    path=args.onnx_quantized_path,
+                    run_suffix=run_suffix,
+                ),
+                onnx_quant_format=args.onnx_quant_format,
+                preprocess_onnx=not args.disable_onnx_preprocess,
+            )
+            _validate_arguments(
+                parser=parser,
+                compression_config=run_compression_config,
+                family=family,
+                device=run_device,
+                model_format=model_format,
+            )
+
             input_config = InputConfig(
                 family=family,
-                batch_size=batch_size,
+                batch_size=run_batch_size,
                 image_shape=image_shape,
                 sequence_length=args.sequence_length,
                 vocab_size=args.vocab_size,
@@ -436,32 +503,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 warmup_iterations=benchmark_config.warmup_iterations,
                 benchmark_iterations=benchmark_config.benchmark_iterations,
                 calibration_iterations=benchmark_config.calibration_iterations,
-                batch_size=batch_size,
-                device=benchmark_config.device,
-                onnx_providers=benchmark_config.onnx_providers,
-                onnx_optimization_level=benchmark_config.onnx_optimization_level,
-            )
-            run_compression_config = CompressionConfig(
-                quantization=QuantizationMode(args.quantization),
-                pruning=PruningMode(args.pruning),
-                pruning_amount=args.pruning_amount,
-                export_onnx=args.export_onnx,
-                onnx_path=_resolve_batched_artifact_path(
-                    path=_resolve_onnx_export_path(
-                        model_ref=args.model,
-                        requested_path=args.onnx_path,
-                    ),
-                    batch_size=batch_size,
-                    total_runs=len(batch_sizes),
-                ),
-                onnx_opset=args.onnx_opset,
-                onnx_quantized_path=_resolve_batched_artifact_path(
-                    path=args.onnx_quantized_path,
-                    batch_size=batch_size,
-                    total_runs=len(batch_sizes),
-                ),
-                onnx_quant_format=args.onnx_quant_format,
-                preprocess_onnx=not args.disable_onnx_preprocess,
+                batch_size=run_batch_size,
+                device=run_device,
+                onnx_providers=run_providers,
+                onnx_optimization_level=run_ort_optimization_level,
             )
             engine = BenchmarkEngine(run_benchmark_config)
 
@@ -470,30 +515,44 @@ def main(argv: Sequence[str] | None = None) -> int:
                     model_ref=args.model,
                     input_config=input_config,
                     device=run_benchmark_config.device,
-                    use_pretrained=args.pretrained,
+                    use_pretrained=run_pretrained,
                     onnx_providers=run_benchmark_config.onnx_providers,
                     onnx_optimization_level=run_benchmark_config.onnx_optimization_level,
                     model_kwargs=model_kwargs,
                     invocation_mode_override=invocation_mode_override,
                     input_names_override=input_names_override,
                     hf_trust_remote_code=args.hf_trust_remote_code,
-                    hf_auto_class=args.hf_auto_class,
+                    hf_auto_class=run_hf_auto_class,
                 )
 
-            benchmark_input_batches = _load_optional_input_batches(
-                path=args.benchmark_inputs_json,
+            benchmark_dataset = _load_optional_input_dataset(
+                path=args.benchmark_data_path,
                 loaded_model=loaded_model,
-                loader=load_input_batches,
+                loader=load_input_dataset,
             )
-            calibration_input_batches = _load_optional_input_batches(
-                path=args.calibration_inputs_json,
+            calibration_dataset = _load_optional_input_dataset(
+                path=args.calibration_data_path,
                 loaded_model=loaded_model,
-                loader=load_input_batches,
+                loader=load_input_dataset,
             )
-            eval_input_batches = _load_optional_input_batches(
-                path=args.eval_inputs_json,
+            eval_dataset = _load_optional_input_dataset(
+                path=args.eval_data_path,
                 loaded_model=loaded_model,
-                loader=load_input_batches,
+                loader=load_input_dataset,
+            )
+            effective_eval_dataset = _select_effective_evaluation_dataset(
+                benchmark_dataset=benchmark_dataset,
+                eval_dataset=eval_dataset,
+            )
+            benchmark_input_batches = None if benchmark_dataset is None else benchmark_dataset.batches
+            calibration_input_batches = None if calibration_dataset is None else calibration_dataset.batches
+            fidelity_input_batches = (
+                None if effective_eval_dataset is None else effective_eval_dataset.batches
+            )
+            evaluation_label_batches = (
+                None
+                if effective_eval_dataset is None or not effective_eval_dataset.label_batches
+                else effective_eval_dataset.label_batches
             )
 
             if loaded_model.format is ModelFormat.ONNX:
@@ -504,7 +563,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     compression_config=run_compression_config,
                     benchmark_input_batches=benchmark_input_batches,
                     calibration_input_batches=calibration_input_batches,
-                    fidelity_input_batches=eval_input_batches,
+                    fidelity_input_batches=fidelity_input_batches,
+                    evaluation_label_batches=evaluation_label_batches,
                 )
             else:
                 results, run_output_paths = _run_pytorch_pipeline(
@@ -514,7 +574,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     compression_config=run_compression_config,
                     benchmark_input_batches=benchmark_input_batches,
                     calibration_input_batches=calibration_input_batches,
-                    fidelity_input_batches=eval_input_batches,
+                    fidelity_input_batches=fidelity_input_batches,
+                    evaluation_label_batches=evaluation_label_batches,
                 )
 
             all_results.extend(results)
@@ -522,6 +583,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         render_results(console=console, results=all_results)
         save_results_csv(results=all_results, path=args.report_path)
+        manifest = build_manifest(
+            args=args,
+            raw_config=raw_config,
+            run_matrix_overrides=matrix_runs,
+            varying_keys=varying_keys,
+            results=all_results,
+            report_path=args.report_path,
+            html_report_path=html_report_path,
+            output_paths=output_paths,
+            q_lab_version=__version__,
+        )
+        if manifest_path is not None:
+            save_manifest(manifest_path, manifest)
+            console.print(f"[bold green]Run manifest saved to[/bold green] {manifest_path}")
+        if html_report_path is not None:
+            save_results_html(results=all_results, path=html_report_path, manifest=manifest)
+            console.print(f"[bold green]HTML report saved to[/bold green] {html_report_path}")
         console.print(f"[bold green]CSV report saved to[/bold green] {args.report_path}")
         if output_paths.get("onnx_export") is not None:
             console.print(
@@ -546,6 +624,7 @@ def _run_pytorch_pipeline(
     benchmark_input_batches,
     calibration_input_batches,
     fidelity_input_batches,
+    evaluation_label_batches,
 ):
     from q_lab.onnx_utils import create_onnx_session, export_to_onnx
     from q_lab.optimization import optimize_model
@@ -572,6 +651,8 @@ def _run_pytorch_pipeline(
             artifact_path=str(loaded_model.original_path) if loaded_model.original_path else None,
             notes="Reference eager/TorchScript baseline.",
             benchmark_input_batches=benchmark_input_batches,
+            evaluation_input_batches=fidelity_input_batches,
+            evaluation_label_batches=evaluation_label_batches,
         )
         results.append(baseline_result)
 
@@ -607,6 +688,8 @@ def _run_pytorch_pipeline(
                 notes=" ".join(optimization.notes),
                 benchmark_input_batches=benchmark_input_batches,
                 fidelity_input_batches=fidelity_input_batches or benchmark_input_batches,
+                evaluation_input_batches=fidelity_input_batches,
+                evaluation_label_batches=evaluation_label_batches,
             )
             results.append(optimized_result)
             if optimization.quantization is QuantizationMode.NONE:
@@ -648,6 +731,8 @@ def _run_pytorch_pipeline(
                 ).strip(),
                 benchmark_input_batches=benchmark_input_batches,
                 fidelity_input_batches=fidelity_input_batches or benchmark_input_batches,
+                evaluation_input_batches=fidelity_input_batches,
+                evaluation_label_batches=evaluation_label_batches,
             )
             results.append(onnx_result)
             output_paths["onnx_export"] = str(exported_path)
@@ -663,6 +748,7 @@ def _run_onnx_pipeline(
     benchmark_input_batches,
     calibration_input_batches,
     fidelity_input_batches,
+    evaluation_label_batches,
 ):
     from q_lab.onnx_utils import create_onnx_session
     from q_lab.optimization import optimize_model
@@ -689,6 +775,8 @@ def _run_onnx_pipeline(
             artifact_path=str(loaded_model.original_path),
             notes="Reference ONNX Runtime baseline.",
             benchmark_input_batches=benchmark_input_batches,
+            evaluation_input_batches=fidelity_input_batches,
+            evaluation_label_batches=evaluation_label_batches,
         )
         results.append(baseline_result)
 
@@ -719,6 +807,8 @@ def _run_onnx_pipeline(
                 notes=" ".join(optimization.notes),
                 benchmark_input_batches=benchmark_input_batches,
                 fidelity_input_batches=fidelity_input_batches or benchmark_input_batches,
+                evaluation_input_batches=fidelity_input_batches,
+                evaluation_label_batches=evaluation_label_batches,
             )
             results.append(optimized_result)
             output_paths["onnx_quantized"] = str(optimization.artifact_path)
@@ -741,17 +831,16 @@ def _resolve_onnx_export_path(model_ref: str, requested_path: Path | None) -> Pa
     return Path("artifacts") / artifact_name
 
 
-def _resolve_batched_artifact_path(
+def _resolve_run_artifact_path(
     path: Path | None,
-    batch_size: int,
-    total_runs: int,
+    run_suffix: str,
 ) -> Path | None:
-    if path is None or total_runs <= 1:
+    if path is None or not run_suffix:
         return path
-    return path.with_name(f"{path.stem}-bs{batch_size}{path.suffix}")
+    return path.with_name(f"{path.stem}-{run_suffix}{path.suffix}")
 
 
-def _load_optional_input_batches(
+def _load_optional_input_dataset(
     path: Path | None,
     loaded_model,
     loader,
@@ -759,6 +848,17 @@ def _load_optional_input_batches(
     if path is None:
         return None
     return loader(path=path, loaded_model=loaded_model)
+
+
+def _select_effective_evaluation_dataset(
+    benchmark_dataset,
+    eval_dataset,
+):
+    if eval_dataset is not None:
+        return eval_dataset
+    if benchmark_dataset is not None and benchmark_dataset.label_batches:
+        return benchmark_dataset
+    return None
 
 
 def _merge_output_paths(

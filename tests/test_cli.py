@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from q_lab import cli, models
+from q_lab.experiments import build_run_matrix, collect_explicit_overrides
 from q_lab.types import (
     CompressionConfig,
     InvocationMode,
@@ -16,7 +17,7 @@ from q_lab.types import (
     PruningMode,
     QuantizationMode,
 )
-from tests.helpers import TinyTextNet, TinyVisionNet
+from tests.helpers import RuleBasedVisionClassifier, TinyTextNet, TinyVisionNet
 
 
 def test_parse_image_shape_accepts_valid_input() -> None:
@@ -79,6 +80,36 @@ def test_expand_config_argv_applies_json_defaults(tmp_path: Path) -> None:
     assert args.benchmark_iterations == 7
     assert args.batch_sizes == "1,4"
     assert args.pretrained is True
+
+
+def test_build_run_matrix_expands_matrix_axes_from_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "matrix.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "model": "resnet18",
+                "matrix": {
+                    "quantization": ["none", "dynamic"],
+                    "providers": ["CPUExecutionProvider"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    parser = cli.build_parser()
+    argv = ["--config", str(config_path)]
+    args = parser.parse_args(cli.expand_config_argv(argv))
+    explicit_overrides, _ = collect_explicit_overrides(parser, argv)
+    matrix_runs, varying_keys = build_run_matrix(
+        args=args,
+        raw_config=cli.load_json_config(config_path),
+        explicit_overrides=explicit_overrides,
+        batch_size_values=cli.parse_batch_sizes(args.batch_sizes, args.batch_size),
+    )
+
+    assert varying_keys == ("providers", "quantization")
+    assert len(matrix_runs) == 2
 
 
 def test_validate_arguments_rejects_invalid_pruning_amount() -> None:
@@ -349,6 +380,58 @@ def test_cli_runs_batch_size_sweep_from_config_for_patched_builtin_vision_model(
     assert set(dataframe["batch_size"]) == {1, 2}
     assert set(dataframe["label"]) == {"baseline", "optimized"}
     assert "throughput_items_per_sec" in dataframe.columns
+
+
+@pytest.mark.integration
+def test_cli_writes_manifest_html_and_eval_metrics(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "eval_report.csv"
+    html_path = tmp_path / "eval_report.html"
+    manifest_path = tmp_path / "eval_manifest.json"
+    eval_dataset_path = tmp_path / "eval_samples.json"
+    eval_dataset_path.write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {"input": [[[0.0] * 8 for _ in range(8)] for _ in range(3)], "label": 0},
+                    {"input": [[[1.0] * 8 for _ in range(8)] for _ in range(3)], "label": 1},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        models.SUPPORTED_TORCHVISION_MODELS,
+        "rulevision",
+        ("Rule Vision", lambda use_pretrained: RuleBasedVisionClassifier()),
+    )
+
+    exit_code = cli.main(
+        [
+            "rulevision",
+            "--eval-data-path",
+            str(eval_dataset_path),
+            "--html-report-path",
+            str(html_path),
+            "--manifest-path",
+            str(manifest_path),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert html_path.exists()
+    assert manifest_path.exists()
+
+    dataframe = pd.read_csv(report_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert dataframe.loc[0, "eval_top1_accuracy_pct"] == 100.0
+    assert dataframe.loc[0, "eval_macro_f1_pct"] == 100.0
+    assert manifest["artifacts"]["report_csv"] == str(report_path)
 
 
 @pytest.mark.integration

@@ -1,6 +1,6 @@
 # Q-Lab
 
-Q-Lab is a production-oriented CLI utility for profiling, pruning, quantizing, exporting, and validating neural-network inference artifacts across PyTorch, TorchScript, and ONNX Runtime. It measures latency with warmup, reports throughput and peak memory, tracks serialized artifact size, estimates sparsity, compares optimized outputs against a reference baseline, prints a Rich console report, and saves the same results to CSV.
+Q-Lab is a production-oriented CLI utility for profiling, pruning, quantizing, exporting, and validating neural-network inference artifacts across PyTorch, TorchScript, and ONNX Runtime. It measures latency with warmup, reports throughput and peak memory, tracks serialized artifact size, estimates sparsity, compares optimized outputs against a reference baseline, computes label-aware evaluation metrics when datasets provide labels, prints a Rich console report, and saves the same results to CSV, HTML, and reproducibility manifests.
 
 ## What Q-Lab Supports
 
@@ -22,7 +22,7 @@ Key constraints:
 - ONNX pruning is intentionally not implemented because dense ONNX runtimes usually do not benefit from zeroed weights without backend-specific sparse execution.
 - Exporting already-quantized PyTorch models to ONNX is not supported. Export the float model first, then run Q-Lab on the exported `.onnx` artifact.
 - Raw checkpoint formats such as bare `state_dict` files are supported through an architecture loader, not as standalone direct inputs.
-- Generic config-driven runs, batch-size sweeps, and dataset-backed benchmark/calibration/evaluation flows are supported through JSON files.
+- Generic config-driven runs, experiment matrices, and dataset-backed benchmark/calibration/evaluation flows are supported through JSON files.
 
 ## Installation
 
@@ -67,13 +67,14 @@ python -m q_lab --help
 Each CLI run follows the same high-level flow:
 
 1. Load a model from a built-in registry, a TorchScript `.pt` artifact, or an ONNX `.onnx` artifact.
-2. Generate synthetic inputs for the selected workload family (`vision` or `text`) or load explicit benchmark/calibration/evaluation inputs from JSON.
-3. Run warmup iterations, then benchmark timed inference iterations, optionally sweeping across multiple batch sizes.
+2. Generate synthetic inputs for the selected workload family (`vision` or `text`) or load explicit benchmark/calibration/evaluation inputs from JSON, JSONL, CSV, or vision image folders.
+3. Run warmup iterations, then benchmark timed inference iterations, optionally sweeping across a config-driven experiment matrix.
 4. Measure serialized artifact size, throughput, and peak host or CUDA memory.
 5. Optionally apply pruning and quantization.
 6. Optionally export a PyTorch/TorchScript model to ONNX and benchmark the exported artifact.
 7. Compare optimized outputs against the baseline with cosine similarity, max absolute difference, and a simple prediction-agreement proxy.
-8. Render a Rich table in the console and save all rows to CSV.
+8. If labels are available, compute classification-style evaluation metrics such as top-1 accuracy and macro F1.
+9. Render a Rich table in the console and save all rows to CSV, plus optional HTML and manifest artifacts.
 
 ## CLI Usage
 
@@ -94,7 +95,7 @@ Q-Lab accepts:
 - An ONNX path such as `artifacts\encoder.onnx`
 - Synthetic input controls such as `--image-shape`, `--sequence-length`, `--vocab-size`, and `--batch-size`
 - A JSON run config through `--config`
-- Optional JSON datasets for benchmark, calibration, and evaluation inputs
+- Optional dataset paths for benchmark, calibration, and evaluation inputs
 
 ### Outputs
 
@@ -102,6 +103,8 @@ Each run produces:
 
 - A Rich console table with benchmark rows such as `baseline`, `optimized`, or `baseline-onnx`
 - A CSV report saved to `--report-path`
+- An HTML report saved to `--html-report-path` when requested
+- A reproducibility manifest saved to `--manifest-path` when requested
 - An ONNX export artifact when `--export-onnx` is used on PyTorch/TorchScript input
 - A quantized ONNX artifact when `--quantization dynamic|static` is used on ONNX input
 
@@ -117,6 +120,8 @@ CSV/report columns include:
 - `size_mb`
 - `sparsity_pct`
 - `accuracy_proxy_pct`
+- `eval_top1_accuracy_pct`
+- `eval_macro_f1_pct`
 - `cosine_similarity`
 - `max_abs_diff`
 - `artifact_path`
@@ -143,9 +148,9 @@ CSV/report columns include:
 | `--invocation-mode {auto,positional,keyword}` | Override how synthetic inputs are passed to eager models |
 | `--input-names` | Comma-separated eager-model input names |
 | `--model-kwargs-json` | JSON object or JSON file path with constructor kwargs for `timm` and Python factory loaders |
-| `--benchmark-inputs-json` | JSON dataset used for timed inference batches |
-| `--calibration-inputs-json` | JSON dataset used for static quantization calibration |
-| `--eval-inputs-json` | JSON dataset used for baseline-versus-optimized fidelity evaluation |
+| `--benchmark-data-path` | Dataset path used for timed inference batches |
+| `--calibration-data-path` | Dataset path used for static quantization calibration |
+| `--eval-data-path` | Dataset path used for baseline-versus-optimized fidelity and label-aware evaluation |
 | `--hf-trust-remote-code` | Enable `trust_remote_code=True` for Hugging Face loading |
 | `--hf-auto-class` | Select the Hugging Face auto model class for `hf:<model>` inputs |
 | `--providers` | Comma-separated ONNX Runtime providers |
@@ -158,6 +163,8 @@ CSV/report columns include:
 | `--onnx-quant-format {qdq,qoperator}` | Static ONNX quantization output format |
 | `--disable-onnx-preprocess` | Skip ONNX graph pre-processing before ORT quantization |
 | `--report-path` | CSV output path |
+| `--html-report-path` | HTML report output path |
+| `--manifest-path` | Reproducibility manifest JSON output path |
 
 ## Examples
 
@@ -215,6 +222,12 @@ Run a config-driven batch-size sweep:
 python -m q_lab --config configs\resnet18_static.json --report-path reports\resnet18_sweep.csv
 ```
 
+Run a config-driven experiment matrix and emit HTML plus a manifest:
+
+```bash
+python -m q_lab --config configs\vit_matrix.json --report-path reports\vit_matrix.csv --html-report-path reports\vit_matrix.html --manifest-path reports\vit_matrix_manifest.json
+```
+
 Benchmark and export a third-party timm architecture:
 
 ```bash
@@ -233,10 +246,10 @@ Benchmark a Hugging Face sequence-classification model with the task-aware loade
 python -m q_lab hf:distilbert-base-uncased --pretrained --hf-auto-class sequence-classification --task text --quantization dynamic --report-path reports\hf_classifier.csv
 ```
 
-Run dataset-backed static quantization and fidelity evaluation:
+Run dataset-backed static quantization, fidelity evaluation, and label-aware metrics:
 
 ```bash
-python -m q_lab resnet18 --quantization static --benchmark-inputs-json data\vision_samples.json --calibration-inputs-json data\vision_samples.json --eval-inputs-json data\vision_samples.json --report-path reports\dataset_driven.csv
+python -m q_lab resnet18 --quantization static --benchmark-data-path data\vision_samples.json --calibration-data-path data\vision_samples.json --eval-data-path data\vision_samples.json --report-path reports\dataset_driven.csv
 ```
 
 ## JSON Config And Dataset Formats
@@ -252,7 +265,24 @@ Example run config:
   "benchmark_iterations": 30,
   "calibration_iterations": 8,
   "batch_sizes": [1, 4, 8],
+  "html_report_path": "reports/resnet18_sweep.html",
+  "manifest_path": "reports/resnet18_sweep_manifest.json",
   "report_path": "reports/resnet18_sweep.csv"
+}
+```
+
+Example config with an experiment matrix:
+
+```json
+{
+  "model": "resnet18",
+  "task": "vision",
+  "matrix": {
+    "batch_size": [1, 4],
+    "quantization": ["none", "static"],
+    "providers": ["CPUExecutionProvider"]
+  },
+  "report_path": "reports/resnet18_matrix.csv"
 }
 ```
 
@@ -280,12 +310,22 @@ Example input dataset for a text model:
 ]
 ```
 
+Example CSV text dataset with labels:
+
+```csv
+input_ids,attention_mask,token_type_ids,label
+"[101,2023,2003,1037,3231]","[1,1,1,1,1]","[0,0,0,0,0]",1
+```
+
 Dataset notes:
 
+- Supported dataset inputs are `.json`, `.jsonl`, `.csv`, and vision image-folder directories.
 - Top-level JSON can be either a list of samples or an object with a `samples` array.
 - Each sample can be a mapping keyed by input name or a positional list matching the model input order.
+- Samples can include an optional `label` field for evaluation.
 - If a sample omits the batch dimension, Q-Lab promotes it to batch size `1`.
 - Non-batch dimensions must match the loaded model input template.
+- Vision image folders follow the usual class-subdirectory layout: one folder per label class, containing image files.
 
 ## Recommended Workflow
 
@@ -374,8 +414,9 @@ Q-Lab is distributed under the MIT License. See `LICENSE` for the full text.
 - Built-in models use random weights by default to avoid implicit downloads. Add `--pretrained` when you want default pretrained checkpoints.
 - Third-party eager PyTorch models loaded through `python:`, `pyfile:`, `timm:`, and `hf:` now use the same pruning, quantization, export, and benchmark pipeline as built-in eager models.
 - Static quantization in both PyTorch and ONNX paths uses synthetic calibration data in this repository. That is sufficient for pipeline validation, but real production calibration should use representative data.
-- When `--benchmark-inputs-json`, `--calibration-inputs-json`, or `--eval-inputs-json` are supplied, Q-Lab uses those user-provided samples instead of repeating one synthetic tensor.
+- When `--benchmark-data-path`, `--calibration-data-path`, or `--eval-data-path` are supplied, Q-Lab uses those user-provided samples instead of repeating one synthetic tensor.
 - `--batch-sizes` repeats the full run for each requested batch size and appends batch-specific suffixes to generated ONNX artifacts when needed.
-- `Accuracy Proxy %` is a regression signal computed on synthetic inputs. It is not a replacement for task accuracy on labeled datasets.
+- The optional `matrix` config section expands one run config into a Cartesian product of experiment variants.
+- `Accuracy Proxy %` is still a regression signal against the baseline, while `Eval Acc %` and `Eval F1 %` become available when labels are present.
 - ONNX input family inference uses graph metadata and common input-name heuristics. When inference is ambiguous, pass `--task vision` or `--task text`.
 - Pruning only affects layers with explicit dense weights such as `Conv2d` and `Linear`. Models without prunable layers will report that limitation instead of silently pretending to optimize.

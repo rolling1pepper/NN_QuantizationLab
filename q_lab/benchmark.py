@@ -9,11 +9,13 @@ from typing import Any, Iterable, Mapping, Sequence, Tuple
 import torch
 from torch import Tensor, nn
 
+from q_lab.evaluation import compute_classification_metrics, extract_logits
 from q_lab.onnx_utils import build_onnx_input_feed
 from q_lab.types import (
     BenchmarkConfig,
     BenchmarkResult,
     BenchmarkStats,
+    EvaluationMetrics,
     FidelityMetrics,
     InvocationMode,
     LoadedModel,
@@ -149,6 +151,8 @@ class BenchmarkEngine:
         notes: str = "",
         benchmark_input_batches: Sequence[Sequence[Tensor]] | None = None,
         fidelity_input_batches: Sequence[Sequence[Tensor]] | None = None,
+        evaluation_input_batches: Sequence[Sequence[Tensor]] | None = None,
+        evaluation_label_batches: Sequence[Tensor] | None = None,
     ) -> BenchmarkResult:
         model = model.to(self.config.device)
         model.eval()
@@ -169,6 +173,12 @@ class BenchmarkEngine:
                 ),
             )
         )
+        evaluation = self.evaluate_pytorch(
+            model=model,
+            loaded_model=loaded_model,
+            input_batches=evaluation_input_batches,
+            label_batches=evaluation_label_batches,
+        )
         return BenchmarkResult(
             label=label,
             backend=RuntimeBackend.PYTORCH,
@@ -182,6 +192,7 @@ class BenchmarkEngine:
             size_mb=size_mb,
             sparsity_pct=sparsity_pct,
             fidelity=fidelity,
+            evaluation=evaluation,
             iterations=self.config.benchmark_iterations,
             artifact_path=artifact_path,
             notes=notes,
@@ -203,6 +214,8 @@ class BenchmarkEngine:
         notes: str = "",
         benchmark_input_batches: Sequence[Sequence[Tensor]] | None = None,
         fidelity_input_batches: Sequence[Sequence[Tensor]] | None = None,
+        evaluation_input_batches: Sequence[Sequence[Tensor]] | None = None,
+        evaluation_label_batches: Sequence[Tensor] | None = None,
     ) -> BenchmarkResult:
         input_batches = tuple(benchmark_input_batches or (loaded_model.example_inputs,))
         input_feeds = tuple(
@@ -225,6 +238,12 @@ class BenchmarkEngine:
                 ),
             )
         )
+        evaluation = self.evaluate_onnx(
+            session=session,
+            loaded_model=loaded_model,
+            input_batches=evaluation_input_batches,
+            label_batches=evaluation_label_batches,
+        )
         return BenchmarkResult(
             label=label,
             backend=RuntimeBackend.ONNX_RUNTIME,
@@ -238,6 +257,7 @@ class BenchmarkEngine:
             size_mb=size_mb,
             sparsity_pct=sparsity_pct,
             fidelity=fidelity,
+            evaluation=evaluation,
             iterations=self.config.benchmark_iterations,
             artifact_path=artifact_path,
             notes=notes,
@@ -271,6 +291,33 @@ class BenchmarkEngine:
             return canonicalize_outputs(outputs[0])
         return canonicalize_outputs(outputs)
 
+    def evaluate_pytorch(
+        self,
+        model: nn.Module,
+        loaded_model: LoadedModel,
+        input_batches: Sequence[Sequence[Tensor]] | None,
+        label_batches: Sequence[Tensor] | None,
+    ) -> EvaluationMetrics:
+        if not input_batches or not label_batches:
+            return EvaluationMetrics()
+
+        prepared_batches = self._prepare_pytorch_batches(
+            device=self.config.device,
+            input_batches=input_batches,
+        )
+        raw_outputs = []
+        with torch.inference_mode():
+            for batch in prepared_batches:
+                raw_outputs.append(
+                    invoke_model(
+                        model=model,
+                        example_inputs=batch,
+                        input_names=loaded_model.input_names,
+                        invocation_mode=loaded_model.invocation_mode,
+                    )
+                )
+        return self._compute_evaluation_metrics(raw_outputs, label_batches)
+
     def capture_onnx_reference_outputs(
         self,
         session: Any,
@@ -288,6 +335,25 @@ class BenchmarkEngine:
         if len(outputs) == 1:
             return canonicalize_outputs(outputs[0])
         return canonicalize_outputs(outputs)
+
+    def evaluate_onnx(
+        self,
+        session: Any,
+        loaded_model: LoadedModel,
+        input_batches: Sequence[Sequence[Tensor]] | None,
+        label_batches: Sequence[Tensor] | None,
+    ) -> EvaluationMetrics:
+        if not input_batches or not label_batches:
+            return EvaluationMetrics()
+
+        raw_outputs = []
+        for batch in input_batches:
+            input_feed = build_onnx_input_feed(
+                input_names=loaded_model.input_names,
+                example_inputs=batch,
+            )
+            raw_outputs.append(session.run(None, input_feed))
+        return self._compute_evaluation_metrics(raw_outputs, label_batches)
 
     def _run_pytorch_loop(
         self,
@@ -396,6 +462,24 @@ class BenchmarkEngine:
             p95_latency_ms=self._compute_percentile(values, 0.95),
             throughput_items_per_sec=throughput_items_per_sec,
             peak_memory_mb=peak_memory_mb,
+        )
+
+    @staticmethod
+    def _compute_evaluation_metrics(
+        raw_outputs: Sequence[Any],
+        label_batches: Sequence[Tensor],
+    ) -> EvaluationMetrics:
+        logits_batches = []
+        for output in raw_outputs:
+            logits = extract_logits(output)
+            if logits is None:
+                continue
+            logits_batches.append(logits)
+        if len(logits_batches) != len(label_batches):
+            return EvaluationMetrics()
+        return compute_classification_metrics(
+            logits_batches=logits_batches,
+            label_batches=label_batches,
         )
 
     @staticmethod

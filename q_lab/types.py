@@ -133,6 +133,13 @@ class FidelityMetrics:
 
 
 @dataclass(frozen=True)
+class EvaluationMetrics:
+    sample_count: int = 0
+    top1_accuracy_pct: Optional[float] = None
+    macro_f1_pct: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class BenchmarkStats:
     mean_latency_ms: float
     std_latency_ms: float
@@ -153,6 +160,13 @@ class OptimizationOutcome:
 
 
 @dataclass(frozen=True)
+class InputDataset:
+    batches: Tuple[Tuple[Any, ...], ...]
+    label_batches: Tuple[Any, ...] = tuple()
+    source_format: str = "synthetic"
+
+
+@dataclass(frozen=True)
 class BenchmarkResult:
     label: str
     backend: RuntimeBackend
@@ -170,6 +184,7 @@ class BenchmarkResult:
     artifact_path: Optional[str]
     notes: str
     execution_target: str = ""
+    evaluation: EvaluationMetrics = field(default_factory=EvaluationMetrics)
 
     def to_record(self) -> Dict[str, Any]:
         return {
@@ -200,6 +215,17 @@ class BenchmarkResult:
                 None
                 if self.fidelity.accuracy_proxy_pct is None
                 else round(self.fidelity.accuracy_proxy_pct, 4)
+            ),
+            "eval_sample_count": self.evaluation.sample_count,
+            "eval_top1_accuracy_pct": (
+                None
+                if self.evaluation.top1_accuracy_pct is None
+                else round(self.evaluation.top1_accuracy_pct, 4)
+            ),
+            "eval_macro_f1_pct": (
+                None
+                if self.evaluation.macro_f1_pct is None
+                else round(self.evaluation.macro_f1_pct, 4)
             ),
             "cosine_similarity": (
                 None

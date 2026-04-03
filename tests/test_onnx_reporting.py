@@ -10,10 +10,11 @@ pytest.importorskip("onnxruntime")
 
 from q_lab.benchmark import BenchmarkEngine
 from q_lab.onnx_utils import create_onnx_session, export_to_onnx
-from q_lab.reporting import render_results, save_results_csv
+from q_lab.reporting import render_results, save_results_csv, save_results_html
 from q_lab.types import (
     BenchmarkResult,
     BenchmarkStats,
+    EvaluationMetrics,
     FidelityMetrics,
     RuntimeBackend,
 )
@@ -78,15 +79,18 @@ def test_render_results_and_save_csv(tmp_path: Path) -> None:
         size_mb=3.21,
         sparsity_pct=0.0,
         fidelity=FidelityMetrics(accuracy_proxy_pct=100.0, cosine_similarity=1.0, max_abs_diff=0.0),
+        evaluation=EvaluationMetrics(sample_count=2, top1_accuracy_pct=100.0, macro_f1_pct=100.0),
         iterations=2,
         artifact_path="artifact.pt",
         notes="Unit test result.",
     )
     console = Console(record=True, width=120)
     csv_path = tmp_path / "report.csv"
+    html_path = tmp_path / "report.html"
 
     render_results(console, [result])
     save_results_csv([result], csv_path)
+    save_results_html([result], html_path, manifest={"q_lab_version": "1.3.0"})
 
     exported_text = console.export_text()
     dataframe = pd.read_csv(csv_path)
@@ -96,7 +100,9 @@ def test_render_results_and_save_csv(tmp_path: Path) -> None:
     assert "Target" in exported_text
     assert "812.50" in exported_text
     assert csv_path.exists()
+    assert html_path.exists()
     assert dataframe.loc[0, "label"] == "baseline"
     assert dataframe.loc[0, "batch_size"] == 1
     assert "throughput_items_per_sec" in dataframe.columns
     assert "peak_memory_mb" in dataframe.columns
+    assert "eval_top1_accuracy_pct" in dataframe.columns

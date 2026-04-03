@@ -112,6 +112,24 @@ class ThirdPartyTextNet(nn.Module):
         return self.head(projected)
 
 
+class RuleBasedVisionClassifier(nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        signal = x.mean(dim=(1, 2, 3))
+        return torch.stack((1.0 - signal, signal), dim=-1)
+
+
+class RuleBasedTextClassifier(nn.Module):
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        del attention_mask, token_type_ids
+        signal = input_ids[:, 0].float().remainder(2)
+        return torch.stack((1.0 - signal, signal), dim=-1)
+
+
 def create_factory_vision_model(
     use_pretrained: bool = False,
     num_classes: int = 4,
@@ -126,3 +144,13 @@ def create_factory_text_model(
 ) -> nn.Module:
     del use_pretrained, vocab_size
     return TinyTextNet().eval()
+
+
+def create_rule_based_vision_model(use_pretrained: bool = False) -> nn.Module:
+    del use_pretrained
+    return RuleBasedVisionClassifier().eval()
+
+
+def create_rule_based_text_model(use_pretrained: bool = False) -> nn.Module:
+    del use_pretrained
+    return RuleBasedTextClassifier().eval()
