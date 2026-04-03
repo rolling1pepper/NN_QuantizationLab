@@ -97,19 +97,23 @@ def test_render_results_and_save_csv(tmp_path: Path) -> None:
     dataframe = pd.read_csv(csv_path)
     exported_html = html_path.read_text(encoding="utf-8")
 
+    assert exported_text.strip()
     assert "Q-Lab Benchmark Report" in exported_text
-    assert "baseline" in exported_text
-    assert "pytorch" in exported_text
-    assert "cpu" in exported_text
-    assert "812.50" in exported_text
     assert csv_path.exists()
     assert html_path.exists()
     assert dataframe.loc[0, "label"] == "baseline"
+    assert dataframe.loc[0, "backend"] == "pytorch"
     assert dataframe.loc[0, "batch_size"] == 1
     assert dataframe.loc[0, "execution_target"] == "cpu"
+    assert dataframe.loc[0, "throughput_items_per_sec"] == pytest.approx(812.5)
+    assert dataframe.loc[0, "peak_memory_mb"] == pytest.approx(3.2)
+    assert dataframe.loc[0, "eval_top1_accuracy_pct"] == pytest.approx(100.0)
     assert "throughput_items_per_sec" in dataframe.columns
     assert "peak_memory_mb" in dataframe.columns
     assert "eval_top1_accuracy_pct" in dataframe.columns
     assert "Q-Lab Benchmark Report" in exported_html
+    assert "baseline" in exported_html
+    assert "cpu" in exported_html
+    assert "812.5" in exported_html
     assert "execution_target" in exported_html
     assert "q_lab_version" in exported_html
