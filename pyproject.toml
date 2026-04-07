@@ -31,7 +31,7 @@ dependencies = [
     "timm==1.0.25",
     "transformers==4.46.3",
     "onnx==1.17.0",
-    "onnxruntime==1.20.1",
+    "onnxruntime==1.24.4",
     "psutil==6.1.1",
     "pandas==2.2.3",
     "rich==13.9.4",
